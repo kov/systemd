@@ -9,7 +9,7 @@
 
 SUBSYSTEM!="block", GOTO="iocost_end"
 
-ACTION!="add", GOTO="iocost_end"
+ACTION=="remove", GOTO="iocost_end"
 
 IMPORT{builtin}="hwdb 'block:*:name:$env{ID_MODEL}:fwrev:$env{ID_REVISION}:'"
 

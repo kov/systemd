@@ -41,8 +41,10 @@ static int help(void) {
         printf("%s [OPTIONS...]\n\n"
                "Set up iocost model and qos solutions for block devices\n"
                "\nCommands:\n"
-               "  apply <path> [solution]    Apply the known solution for the device, if any, otherwise do nothing\n"
-               "  query <path>               Query the known solution for the device\n"
+               "  apply <path> [SOLUTION]    Apply solution for the device if\n"
+               "                             found, do nothing otherwise\n"
+               "  query <path>               Query the known solution for\n"
+               "                             the device\n"
                "\nOptions:\n"
                "  -h --help                  Show this help\n"
                "     --version               Show package version\n",
@@ -144,11 +146,12 @@ static int query_named_solution(
         if (!name) {
                 r = get_known_solutions(device, &solutions);
                 if (r == -ENOENT) {
-                       log_debug_errno(r, "No entry found for device, skipping iocost logic.");
+                        *ret_qos = *ret_model = NULL;
+                        log_device_debug_errno(device, r, "No entry found for device, skipping iocost logic.");
                         return 0;
                 }
                 if (r < 0)
-                        return log_error_errno(r, "Failed to query solutions from device: %m");
+                        return log_device_error_errno(device, r, "Failed to query solutions from device: %m");
 
                 r = choose_solution(solutions, &name);
                 if (r < 0)
@@ -172,6 +175,7 @@ static int query_named_solution(
 
         r = sd_device_get_property_value(device, qos_key, &qos);
         if (r == -ENOENT) {
+                *ret_qos = *ret_model = NULL;
                 log_debug_errno(r, "No value found for key %s, skipping iocost logic.", qos_key);
                 return 0;
         }
@@ -180,6 +184,7 @@ static int query_named_solution(
 
         r = sd_device_get_property_value(device, model_key, &model);
         if (r == -ENOENT) {
+                *ret_qos = *ret_model = NULL;
                 log_debug_errno(r, "No value found for key %s, skipping iocost logic.", model_key);
                 return 0;
         }
@@ -209,7 +214,7 @@ static int apply_solution_for_path(const char *path, const char *name) {
 
         r = sd_device_get_devnum(device, &devnum);
         if (r < 0)
-                return log_error_errno(r, "Error getting devnum for device %s: %m", path);
+                return log_device_error_errno(device, r, "Error getting devnum: %m");
 
         if (asprintf(&qos, DEVNUM_FORMAT_STR " enable=1 ctrl=user %s", DEVNUM_FORMAT_VAL(devnum), qos_params) < 0)
                 return log_oom();
@@ -247,24 +252,22 @@ static int query_solutions_for_path(const char *path) {
         if (r < 0)
                 return log_error_errno(r, "Error looking up device: %m");
 
-        if ((sd_device_get_property_value(device, "ID_MODEL_FROM_DATABASE", &model_name) < 0 &&
-             sd_device_get_property_value(device, "ID_MODEL", &model_name) < 0))
-                return log_error_errno(SYNTHETIC_ERRNO(ENOENT), "Model name for device %s is unknown", path);
+        if (sd_device_get_property_value(device, "ID_MODEL_FROM_DATABASE", &model_name) < 0)
+                if ((r = sd_device_get_property_value(device, "ID_MODEL", &model_name)) < 0)
+                        return log_device_error_errno(device, r, "Model name for device %s is unknown", path);
 
         r = get_known_solutions(device, &solutions);
+        if (r == -ENOENT)
+                return log_device_info_errno(device, r, "Attribute IOCOST_SOLUTIONS missing, model not found in hwdb.");
         if (r < 0)
-                return log_error_errno(r, "No solutions found for device %s, model name %s on hwdb: %m\n", path, model_name);
+                return log_device_error_errno(device, r, "Couldn't access IOCOST_SOLUTIONS for device %s, model name %s on hwdb: %m\n", path, model_name);
 
         r = choose_solution(solutions, &default_solution);
         if (r < 0)
-                return log_error_errno(
-                                r,
-                                "No solutions found for device %s, model name %s on hwdb: %m",
-                                path,
-                                model_name);
+                return r;
 
-        log_info("Known solutions for %s model name: %s\n"
-                 "Target solution: %s\n"
+        log_info("Known solutions for %s model name: \"%s\"\n"
+                 "Preferred solution: %s\n"
                  "Solution that would be applied: %s",
                  path, model_name,
                  arg_target_solution, default_solution);
